@@ -306,3 +306,4 @@ dmypy.json
 **/node_modules
 .idea
 .coverage*
+CLAUDE.md
