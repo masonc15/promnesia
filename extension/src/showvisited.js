@@ -67,7 +67,24 @@ function formatVisit(v) {
     if (context != null) {
         const e_ctx = document.createElement('span')
         e_ctx.classList.add('context')
-        e_ctx.textContent = context
+
+        // Check if context is HTML (starts with !html marker)
+        const HTML_MARKER = '!html '
+        if (context.startsWith(HTML_MARKER)) {
+            // Strip marker and safely render HTML
+            const htmlContent = context.substring(HTML_MARKER.length)
+            // Use DOMParser for safe HTML rendering (prevents XSS)
+            const parser = new DOMParser()
+            const doc = parser.parseFromString(htmlContent, 'text/html')
+            const nodes = doc.body.childNodes
+            for (const node of nodes) {
+                e_ctx.appendChild(node.cloneNode(true))
+            }
+        } else {
+            // Plain text context
+            e_ctx.textContent = context
+        }
+
         e.appendChild(e_ctx)
     }
     const {href: href, title: title} = locator || {}
