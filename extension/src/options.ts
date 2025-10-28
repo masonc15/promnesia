@@ -35,6 +35,7 @@ type BaseOptions = {
     use_bookmarks     : boolean,
 
     use_browserhistory: boolean,
+    use_browserhistory_for_mark_visited: boolean,
     browserhistory_max_results: number,
 
     verbose_errors_on: boolean;
@@ -89,6 +90,7 @@ function defaultOptions(): StoredOptions {
         use_bookmarks     : true,
 
         use_browserhistory: true,
+        use_browserhistory_for_mark_visited: false,
         browserhistory_max_results: 10000,
 
         // todo might be nice to have some of these none to tell apart from default set by me, or user set...

@@ -10,7 +10,8 @@ import {Toggles, getOptions, setOption, THIS_BROWSER_TAG} from './options'
 
 import {defensify, notifications, Notify, notifyError} from './notifications'
 import {Filterlist} from './filterlist'
-import {isAndroid as isMobile, allsources} from './sources'
+import {isAndroid as isMobile, allsources, MultiSource, bookmarks, thisbrowser} from './sources'
+import {backend} from './api'
 
 
 // useful for debugging
@@ -373,7 +374,23 @@ async function doToggleMarkVisited(tabId: number, {show}: {show: boolean | null}
         }
     })
     const page_urls = Array.from(await filter_urls(results))
-    const resp = await allsources.visited(page_urls)
+
+    // Build custom source list for mark-visited based on options
+    const opts = await getOptions()
+    const sources = []
+
+    if (opts.host != '') {
+        sources.push(backend)
+    }
+    if (opts.use_bookmarks) {
+        sources.push(bookmarks)
+    }
+    if (opts.use_browserhistory_for_mark_visited) {
+        sources.push(thisbrowser)
+    }
+
+    const markVisitedSource = new MultiSource(...sources)
+    const resp = await markVisitedSource.visited(page_urls)
     if (resp instanceof Error) {
         await Notify.error(tabId, resp)
         return
@@ -386,6 +403,12 @@ async function doToggleMarkVisited(tabId: number, {show}: {show: boolean | null}
         if (r == null) {
             continue
         }
+
+        // Filter out browser-history tagged visits if the option is disabled
+        if (!opts.use_browserhistory_for_mark_visited && r.tags.includes('browser-history')) {
+            continue
+        }
+
         visited.set(page_urls[i], r)
     }
 

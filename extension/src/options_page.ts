@@ -139,6 +139,7 @@ const o_host           = new Simple('host_id'               )
 const o_token          = new Simple('token_id'              )
 const o_use_bookmarks      = new Toggle('use_bookmarks_id'     )
 const o_use_browserhistory = new Toggle('use_browserhistory_id')
+const o_use_browserhistory_for_mark_visited = new Toggle('use_browserhistory_for_mark_visited_id')
 const o_browserhistory_max_results = new ONumber('browserhistory_max_results_id')
 const o_verbose_errors = new Toggle('verbose_errors_id'     )
 const o_contexts_popup = new Toggle('contexts_popup_id'     )
@@ -161,6 +162,7 @@ document.addEventListener('DOMContentLoaded', defensifyAlert(async () => {
     await o_token                     .setValue(opts.token)
     await o_use_bookmarks             .setValue(opts.use_bookmarks)
     await o_use_browserhistory        .setValue(opts.use_browserhistory)
+    await o_use_browserhistory_for_mark_visited.setValue(opts.use_browserhistory_for_mark_visited)
     await o_browserhistory_max_results.setValue(opts.browserhistory_max_results)
     await o_verbose_errors            .setValue(opts.verbose_errors_on)
     await o_contexts_popup            .setValue(opts.contexts_popup_on)
@@ -206,6 +208,7 @@ document.getElementById(
         token                     : await (o_token                     .getValue()),
         use_bookmarks             : await (o_use_bookmarks             .getValue()),
         use_browserhistory        : await (o_use_browserhistory        .getValue()),
+        use_browserhistory_for_mark_visited: await (o_use_browserhistory_for_mark_visited.getValue()),
         browserhistory_max_results: await (o_browserhistory_max_results.getValue()),
         verbose_errors_on         : await (o_verbose_errors            .getValue()),
         contexts_popup_on         : await (o_contexts_popup            .getValue()),
