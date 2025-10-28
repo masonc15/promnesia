@@ -13,6 +13,10 @@ def index() -> Results:
     from . import hpi  # noqa: F401
 
     for bm in bookmarks():
+        # Skip any errors yielded by the HPI source
+        if isinstance(bm, Exception):
+            continue
+
         # Build rich context: tags + description/notes
         # Using HTML format with !html prefix to enable clickable tags in hover popup
         context_parts = []
