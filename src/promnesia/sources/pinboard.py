@@ -8,8 +8,9 @@ from promnesia.common import Loc, Results, Visit
 def index() -> Results:
     from urllib.parse import quote
 
-    from . import hpi  # noqa: F401,I001
     from my.pinboard import bookmarks
+
+    from . import hpi  # noqa: F401
 
     for bm in bookmarks():
         # Build rich context: tags + description/notes
