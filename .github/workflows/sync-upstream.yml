@@ -1,0 +1,62 @@
+name: Sync Fork with Upstream
+
+on:
+  schedule:
+    # Run every Sunday at midnight UTC
+    - cron: '0 0 * * 0'
+  workflow_dispatch:  # Allow manual trigger
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Fetch all history for proper merging
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Add upstream remote
+        run: |
+          git remote add upstream https://github.com/karlicoss/promnesia || true
+          git fetch upstream
+
+      - name: Merge upstream changes
+        id: merge
+        run: |
+          git merge upstream/master --no-edit
+
+      - name: Push changes
+        run: |
+          git push origin master
+
+      - name: Send failure notification
+        if: failure()
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 587
+          username: ${{ secrets.MAIL_USERNAME }}
+          password: ${{ secrets.MAIL_PASSWORD }}
+          subject: 'Promnesia Fork Sync Failed'
+          to: masonc789@gmail.com
+          from: ${{ secrets.MAIL_USERNAME }}
+          body: |
+            The automated sync from upstream (karlicoss/promnesia) to your fork has failed.
+
+            Workflow Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+            Branch: master
+            Time: ${{ github.event.repository.updated_at }}
+
+            This usually means there are merge conflicts that need manual resolution.
+
+            To resolve manually:
+            git fetch upstream
+            git merge upstream/master
+            # Resolve conflicts
+            git push origin master
