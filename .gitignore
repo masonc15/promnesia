@@ -307,3 +307,7 @@ dmypy.json
 .idea
 .coverage*
 CLAUDE.md
+
+# Extension build artifacts
+extension/*.xpi
+extension/web-ext-artifacts/
