@@ -1,14 +1,19 @@
+from __future__ import annotations
+
 import json
 import re
 import subprocess
 from dataclasses import dataclass
+from datetime import datetime
 from functools import cached_property
 from pathlib import Path
 from typing import Any
 
-from loguru import logger
 from selenium import webdriver
-from webdriver_utils import get_browser_process, is_headless
+
+from .common import logger
+from .utils import timeout
+from .webdriver_utils import get_browser_process, is_headless
 
 
 @dataclass
@@ -48,29 +53,60 @@ class AddonHelper:
     def headless(self) -> bool:
         return is_headless(self.driver)
 
+    @property
+    def _has_selenium_bridge(self) -> bool:
+        return any(entry.get('js') == ['selenium_bridge.js'] for entry in self.manifest.get('content_scripts', []))
+
+    def _wait_for_selenium_bridge(self) -> None:
+        assert self._has_selenium_bridge, (
+            "This won't work without selenium_bridge.js, you probably built the extension in --publish mode"
+        )
+        # wait until selenium_bridge is injected, otherwise it's possible to have a race condition
+        # usually it happens very quickly, but retry a few times just in case
+        for _ in timeout(seconds=5):  # previously had on 2 second, but sometimes takes a bit longer on github actions
+            if self.driver.execute_script('return document.documentElement.dataset.seleniumBridgeInjected'):
+                break
+
     def trigger_command(self, command: str) -> None:
         # note: also for chrome possible to extract from prefs['extensions']['commands'] if necessary
         commands = self.manifest['commands']
         assert command in commands, (command, commands)
 
         if self.headless:
-            # see selenium_bridge.js
-            ccc = f'selenium-bridge-{command}'
-            self.driver.execute_script(
-                f"""
-            var event = document.createEvent('HTMLEvents');
-            event.initEvent('{ccc}', true, true);
-            document.dispatchEvent(event);
-            """
-            )
+            self._wait_for_selenium_bridge()
+            self.driver.execute_script('document.dispatchEvent(new Event(arguments[0]))', f'selenium-bridge-{command}')
         else:
             hotkey = commands[command]['suggested_key']['default']
             self.gui_hotkey(hotkey)
 
+    def get_extension_state(self) -> dict[str, Any]:
+        """
+        Returns a dict with keys like 'badge_text', 'title', or 'error' if something went wrong.
+        """
+        self._wait_for_selenium_bridge()
+
+        # use a timestamp to make sure we don't read some stale response
+        timestamp_ms = int(datetime.now().timestamp() * 1000)
+        self.driver.execute_script(
+            "document.dispatchEvent(new CustomEvent('selenium-bridge-get-state', {detail: {timestamp_ms: arguments[0]}}))",
+            timestamp_ms,
+        )
+
+        # wait for response to appear in DOM
+        for _ in timeout(seconds=5):
+            state_json = self.driver.execute_script('return document.documentElement.dataset.seleniumBridgeState')
+            if state_json is None:
+                continue
+            state = json.loads(state_json)
+            if state.get('timestamp_ms') != timestamp_ms:
+                continue
+            return state
+        raise RuntimeError("Shouldn't happen")
+
     def gui_hotkey(self, key: str) -> None:
         assert not self.headless  # just in case
         lkey = key.lower().split('+')
-        logger.debug(f'sending hotkey {lkey}')
+        logger.debug(f'pyautogui: sending hotkey {lkey}')
 
         import pyautogui
 
@@ -79,6 +115,8 @@ class AddonHelper:
 
     def gui_write(self, *args, **kwargs) -> None:
         assert not self.headless
+
+        logger.debug(f'pyautogui: typing {args} {kwargs}')
 
         import pyautogui
 

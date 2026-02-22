@@ -179,7 +179,6 @@ export class Blacklisted {
 }
 
 export const Methods = {
-    GET_SIDEBAR_VISITS  : 'getActiveTabVisitsForSidebar',
     BIND_SIDEBAR_VISITS : 'bindSidebarVisits',
     SEARCH_VISITS_AROUND: 'searchVisitsAround',
     MARK_VISITED        : 'markVisited',
@@ -336,4 +335,10 @@ export function assert(condition: any, msg?: string): asserts condition {
     if (!condition) {
         throw new Error(`assertion failed ${msg}`)
     }
+}
+
+
+// js doesn't have builtin async sleep :(
+export async function sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms))
 }

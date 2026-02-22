@@ -1,5 +1,5 @@
 // due to firefox + chrome and manifest v2 + v3 combination, 95% of the manifest is JS generated anyway
-// so with this we're just generaing it fully dynamically
+// so with this we're just generating it fully dynamically
 
 import assert from 'assert'
 
@@ -14,17 +14,16 @@ const T = {
 // ugh. declarative formats are shit.
 export function generateManifest({
     target,  // str
-    version, // str
-    release, // bool
+    manifest_version, // str
     publish, // bool
     ext_id   // str
 } = {}) {
     assert(target)
-    assert(version)
-    assert(release !== null)
+    assert(manifest_version)
+    assert(publish !== null)
     assert(ext_id)
 
-    const v3 = version == '3'
+    const v3 = manifest_version == '3'
 
     // Firefox wouldn't let you rebind its default shortcuts most of which use Shift
     // On the other hand, Chrome wouldn't let you use Alt
@@ -68,32 +67,30 @@ export function generateManifest({
         "default_icon": "images/ic_not_visited_48.png",
         "default_title": "Show promnesia sidebar",
     }
+    if (target === T.FIREFOX) { // only supported in firefox https://github.com/mozilla/web-ext/issues/2874
+        // otherwise firefox hides the icon under the "puzzle piece" menu
+        // At the very least it's annoying for testing, but also for promnesia it makes sense to show anyway
+        action["default_area"] = "navbar"
+        // in chrome, we're achieving the same thing by injecting "key" (see below)
+    }
 
 
-    const endpoints = (domain) => [
-        // TODO not sure if need to include api subpages?? seems like connect-src doesn't like /* in path component..
-        "http://"  + domain + "/",
-        "https://" + domain + "/",
-    ]
-
-
-    // prepare for manifest v3
     const host_permissions = [
-        // broad permissions (*) are necessary for webNavigation to work
+        // broad permissions (*) are necessary for webNavigation and scripting apis to work
         // otherwise we get "Cannot access contents of the page. Extension manifest must request permission to access the respective host."
         'file:///*',
-        ...endpoints('*'),
+        'http://*/*',
+        'https://*/*',
         /* also note that if we have host permissions, we don't need tabs/activeTab permission to inject css/code
          * this is necessary to call insertCss and executeScript
          * note that just activeTab isn't enough because things aren't necessarily happening after user interaction like action
          * e.g. sidebar/icon state is updating after webNavigation callback
          */
     ]
-    // FIXME not sure if need these considering it needs broad host permissions anyway?
-    const optional_host_permissions = endpoints('*')
 
 
     // TODO make permissions literate
+    // keep in sync with readme
     const permissions = [
         // for keeping extension settings
         "storage",
@@ -114,57 +111,28 @@ export function generateManifest({
         // to use local browsing history
         // todo could be optional?
         "history",  // NOTE: isn't available on mobile
+
+        // needed to inject CSS/execute JS within pages
+        // NOTE: needs to be paired with host permissions to allow injecting code/css into tabs
+        "scripting",
     ]
 
 
     const optional_permissions = []
 
-    if (target === T.FIREFOX || v3) {
-        // chrome v2 doesn't support scripting api
-        // FIXME need to actually start using it
-        permissions.push("scripting")
-    }
-
-
-    const content_security_policy = [
-        "script-src 'self'",  // this must be specified when overriding, otherwise it complains
-        /// also this works, but it seems that default-src somehow shadows style-src???
-        // "default-src 'self'",
-        // "style-src 'unsafe-inline'", // FFS, otherwise <style> directives on extension's pages not working??
-        ///
-
-        // also need to override it to eclude 'upgrade-insecure-requests' in manifest v3?
-        // https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/Content_Security_Policy#upgrade_insecure_network_requests_in_manifest_v3
-        // NOTE: could be connect-src http: https: to allow all?
-        // but we're specifically allowing endpoints that have /capture in them
-        "connect-src " + endpoints('*:*').join(' '),
-    ].join('; ')
-
-
     const background = {}
     if (v3) {
         if (target === T.CHROME) {
             // webext lint will warn about this since it's not supported in firefox yet
+            // see https://github.com/mozilla/web-ext/issues/2916
             background['service_worker'] = 'background.js'
-
-            // this isn't supported in chrome manifest v3 (chrome warns about unsupported field)
-            // but NOT in older chrome versions (on which end2end tests are actually working)
-            // -- if you specify scripts, loading extension actually fails
-            // ... but without it webext lint fails
-            // background['scripts'] = ['background.js']
-            // sigh... ended up adding a wrapper around webext lint to filter out this one error for chrome...
         } else {
             background['scripts'] = ['background.js']
         }
     } else {
-        if (target === T.CHROME) {
-            background['scripts'] = ['background_chrome_mv2.js']
-        } else {
-            background['scripts'] = ['background.js']
-        }
+        background['scripts'] = ['background.js']
         background['persistent'] = false
     }
-    // this doesn't have any effect in mv2 chrome, see the hack above for chrome specifically
     background['type'] = 'module'
 
     const _resources = [
@@ -173,9 +141,16 @@ export function generateManifest({
     ]
 
     const web_accessible_resources = v3 ? [{resources: _resources, matches: [ '*://*/*']}] : _resources
+    const content_scripts = []
+
+    // this is only needed during testing
+    if (!publish) {
+        // NOTE: ugh seems like in some browsers (firefox?) this may implicitly grant broad host permissions during installation??
+        content_scripts.push({"matches": ["<all_urls>"], "js": ["selenium_bridge.js"]})
+    }
 
     const manifest = {
-        name: pkg.name + (release ? '' : ' [dev]'),
+        name: pkg.name + (publish ? '' : ' [dev]'),
         version: pkg.version,
         description: pkg.description,
         permissions: permissions,
@@ -194,15 +169,22 @@ export function generateManifest({
     }
     manifest[action_name] = action
 
-    if (target === T.FIREFOX) {
-        // NOTE: chrome v3 works without content_security_policy??
-        // but in firefox it refuses to make a request even when we allow hostname permission??
-        manifest.content_security_policy = (v3 ? {extension_pages: content_security_policy} : content_security_policy)
+    if (content_scripts.length > 0) {
+        manifest['content_scripts'] = content_scripts
     }
 
-    // this is only needed during testing
-    if (!publish) {
-        manifest.content_scripts = [{"matches": ["<all_urls>"], "js": ["selenium_bridge.js"]}]
+    if (target === T.FIREFOX && v3) {
+        // https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/Content_Security_Policy#upgrade_insecure_network_requests_in_manifest_v3
+        // Firefox v3 manifest is trying to always force https, which isn't ideal for small backend like grasp (seemsingly unless it's localhost)
+        // I.e. can see in devtools
+        //   Content-Security-Policy: Upgrading insecure request ‘http://hostname:17890/capture’ to use ‘https’
+        // , after that it fails to talk to the server via https, and it manifests as network error.
+
+        // See https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/Content_Security_Policy#default_content_security_policy
+        // This is just default policy, but with 'upgrade-insecure-requests' excluded
+        const content_security_policy = "script-src 'self'"
+
+        manifest.content_security_policy = {extension_pages: content_security_policy}
     }
 
     // NOTE: this is only for mobile Firefox, we dynamically enable it in background page
@@ -220,20 +202,9 @@ export function generateManifest({
     }
 
     if (v3) {
-        if (target === T.FIREFOX) {
-            // firefox doesn't support optional_host_permissions yet
-            // see https://bugzilla.mozilla.org/show_bug.cgi?id=1766026
-            // and https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/manifest.json/optional_permissions#host_permissions
-            // note that these will still have to be granted by user (unlike in chrome)
-            manifest.host_permissions = host_permissions
-            manifest.optional_permissions.push(...optional_host_permissions)
-        } else {
-            manifest.host_permissions = host_permissions
-            manifest.optional_host_permissions = optional_host_permissions
-        }
+        manifest.host_permissions = host_permissions
     } else {
         manifest.permissions.push(...host_permissions)
-        manifest.optional_permissions.push(...optional_host_permissions)
     }
 
     if (target === T.FIREFOX || v3) {
@@ -243,8 +214,16 @@ export function generateManifest({
         manifest['browser_specific_settings'] = {
             'gecko': {
                 'id': gecko_id,
+                'data_collection_permissions': {  // required for new firefox addons
+                    'required': ['none']
+                },
             },
         }
+    }
+    if (target === T.CHROME) {
+        // to achieve stable extension id, needs "key" in manifest.json (this is injected in generate_manifest)
+        // see https://developer.chrome.com/docs/extensions/reference/manifest/key
+        manifest['key'] = "cHJvbW5lc2lhLWV4dGVuc2lvbi1pZA=="  // this needs to be a base64 string
     }
     return manifest
 }

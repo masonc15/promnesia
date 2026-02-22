@@ -6,23 +6,21 @@ from pathlib import Path
 from subprocess import check_call
 from time import sleep
 
-from addon_helper import get_window_id
-from common import uses_x
-from end2end_test import (  # type: ignore[attr-defined]
-    CH,
-    FF,
-    _test_helper,
-    browsers,
-    configure_extension,
+from .addon_helper import get_window_id
+from .common import uses_x
+from .record import CURSOR_SCRIPT, SELECT_SCRIPT, hotkeys, record
+from .test_end2end import (  # type: ignore[attr-defined]
+    _test_helper,  # ty: ignore[unresolved-import]
+    configure_extension,  # ty: ignore[unresolved-import]
     confirm,
 )
-from record import CURSOR_SCRIPT, SELECT_SCRIPT, hotkeys, record
+from .webdriver_utils import CHROME, FIREFOX, browsers, get_webdriver
 
 
 def real_db():
     import shutil
 
-    from private import real_db_path, test_filter  # type: ignore[import-not-found]
+    from .private import real_db_path, test_filter  # type: ignore[import-not-found,unused-ignore,import-untyped]
 
     def indexer(tdir: Path):
         tdb = tdir / 'promnesia.sqlite'
@@ -195,7 +193,7 @@ def wait(x):
 
 
 @uses_x
-@browsers(FF, CH)
+@browsers(FIREFOX, CHROME)
 def test_demo_quick(tmp_path, browser):
     path = Path('demos/quick')
     with demo_helper(
@@ -222,7 +220,7 @@ demos = Path('demos')
 
 # TODO need to determine that uses X automatically
 @uses_x
-@browsers(FF, CH)
+@browsers(FIREFOX, CHROME)
 def test_demo_mark_visited(tmp_path, browser):
     # TODO wonder if it's possible to mess with settings in local storage? unlikely...
 
@@ -290,7 +288,7 @@ You can click right on the ones you haven't seen before and start exploring!
 
 
 @uses_x
-@browsers(FF, CH)
+@browsers(FIREFOX, CHROME)
 def test_demo_mark_visited_2(tmp_path, browser):
     path = demos / 'mark-visited-2'
 
@@ -340,7 +338,7 @@ Links I've already visited are marked with dots!
 
 
 @uses_x
-@browsers(FF, CH)
+@browsers(FIREFOX, CHROME)
 def test_demo_child_visits(tmp_path, browser):
     path = Path('demos/child-visits')
     with demo_helper(
@@ -414,7 +412,7 @@ I guess I should follow him!
 
 
 @uses_x
-@browsers(FF, CH)
+@browsers(FIREFOX, CHROME)
 def test_demo_child_visits_2(tmp_path, browser):
     path = Path('demos/child-visits-2')
 
@@ -519,17 +517,14 @@ def scroll_to_text(driver, text: str):
     # TODO a bit of wait??
 
 
-from end2end_test import get_webdriver
-
-
 @uses_x
-@browsers(FF, CH)
+@browsers(FIREFOX, CHROME)
 def test_demo_highlights(tmp_path, browser):
-    assert browser == FF, browser  # because of the profile_dir hack
+    assert browser == FIREFOX, browser  # because of the profile_dir hack
     path = demos / 'highlights'
 
     def before(driver):
-        from private import instapaper_cookies
+        from .private import instapaper_cookies  # ty: ignore[unresolved-import]
 
         # necessary to set cookies on instapaper..
         driver.get('http://instapaper.com')
@@ -650,7 +645,7 @@ It's not using any annotation service -- it's just a plaintext file!
 
 
 @uses_x
-@browsers(FF, CH)
+@browsers(FIREFOX, CHROME)
 def test_demo_how_did_i_get_here(tmp_path, browser):
     path = demos / 'how_did_i_get_here'
 
@@ -741,7 +736,7 @@ Aha! Here's the reference to the book.
 
 
 @uses_x
-@browsers(FF, CH)
+@browsers(FIREFOX, CHROME)
 def test_demo_watch_later(tmp_path, browser):
     path = demos / 'watch_later'
 

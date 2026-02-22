@@ -137,7 +137,6 @@ const pinOnDoubleClick = {
 function showMark(element) {
     const url = element.href
     // 'visited' passed in backgroud.js
-    // eslint-disable-next-line no-undef
     const v = window.visited.get(url)
     if (!v) {
         return // no visits or was excluded (add some data attribute maybe?)

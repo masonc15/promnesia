@@ -19,15 +19,12 @@ dependencies = [
 ]
 requires-python = ">=3.12"
 
-## these need to be set if you're planning to upload to pypi
+## these are only useful for pypi
 description = "Enhancement of your browsing history"
-license = {file = "LICENSE"}
-authors = [
-    {name = "Dima Gerasimov (@karlicoss)", email = "karlicoss@gmail.com"},
-]
-maintainers = [
-    {name = "Dima Gerasimov (@karlicoss)", email = "karlicoss@gmail.com"},
-]
+license     = {file = "LICENSE"}
+authors     = [{name = "Dima Gerasimov (@karlicoss)", email = "karlicoss@gmail.com"}]
+maintainers = [{name = "Dima Gerasimov (@karlicoss)", email = "karlicoss@gmail.com"}]
+
 [project.urls]
 Homepage = "https://github.com/karlicoss/promnesia"
 ##
@@ -78,19 +75,13 @@ all = [
 # On the other hand, it's a bit annoying that it's always included by default? 
 # To make sure it's not included, need to use `uv run --exact --no-default-groups ...`
 testing = [
-    "pytest",
+    "pytest>=9",  # need version 9 for proper namespace package support
     "ruff",
     
     "hypothesis",
 
-    "loguru",  # used in addon_helper... not sure if should just use promnesia's logger?
-
     "psutil",
     "requests",
-
-    # todo hmm ideally would be in corresponding testing-... sections
-    # but we don't split separate mypy for end2end tests... so idk
-    "selenium"      ,  # browser automations
 
     # NOTE: markdown is only used for test_cli... might be nice to decouple
     "promnesia[markdown]",
@@ -101,30 +92,29 @@ testing-all = [
 ]
 testing-end2end = [
     { include-group = "testing-all" },
-    "click"         ,  # confirmations for end2end test (might remove dependency)
+
+    "selenium",   # browser automations
+    "loguru",     # used in addon_helper... not sure if should just use promnesia's logger?
+    "click",      # confirmations for end2end test
+    "pyautogui",  # for keyboard automation during end2end tests
+    "ipdb"     ,  # optional but a bit nicer for breakpoints
+
     "pytest-timeout",  # for PYTEST_TIMEOUT env variable
     "pytest-xdist"  ,  # not used atm, but helpful to parallelise end2end tests
-
-    "promnesia[HPI]",
-]
-testing-gui = [
-    { include-group = "testing-end2end" },
-    # pyautogui seems problematic, wheels often fail to build under windows
-    # we don't use it in CI, so keep in a separate extras section
-    "pyautogui",  # for keyboard automation during end2end tests
+    "pytest-repeat" ,  # helpful to debug flaky tests
 ]
 typecheck = [
     { include-group = "testing" },
     "mypy",
-    "lxml",  # for mypy coverage
-    "ty>=0.0.1a22",
+    "lxml", # for mypy html coverage
+    "ty>=0.0.8",
 
-    "types-psutil",
     "types-requests",
+    "types-psutil",
 ]
 typecheck-all = [
     { include-group = "typecheck" },
-    "promnesia[HPI,org,markdown]",
+    { include-group = "testing-end2end" },
 
     "types-PyAutoGUI",
 ]

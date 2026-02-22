@@ -10,13 +10,9 @@ from pathlib import Path
 
 import pytest
 import requests
+from loguru import logger  # noqa: F401  # used/impoted in other tests
 
-from promnesia.tests.common import free_port
-
-
-def has_x() -> bool:
-    # meh, not very portable, but good enough for now
-    return 'DISPLAY' in os.environ
+from promnesia.tests.common import free_port, tmp_popen
 
 
 def under_ci() -> bool:
@@ -27,6 +23,7 @@ def skip_if_ci(reason):
     return pytest.mark.skipif(under_ci(), reason=reason)
 
 
+# used in demos.py -- baybe get rid of it?
 def uses_x(f):
     @skip_if_ci('Uses X server')
     @wraps(f)
@@ -34,20 +31,6 @@ def uses_x(f):
         return f(*args, **kwargs)
 
     return ff
-
-
-@contextmanager
-def tmp_popen(*args, **kwargs):
-    import psutil
-
-    with psutil.Popen(*args, **kwargs) as p:
-        try:
-            yield p
-        finally:
-            for c in p.children(recursive=True):
-                c.kill()
-            p.kill()
-            p.wait()
 
 
 @contextmanager
@@ -71,6 +54,7 @@ def local_http_server(path: Path) -> Iterator[str]:
         yield endpoint
 
 
+# TODO move to main package?
 def notnone[T](x: T | None) -> T:
     assert x is not None
     return x

@@ -10,7 +10,7 @@ import type {Options} from './options'
 // last resort.. because these could be annoying (also might not make sense to display globally)
 // only using it when there is no other context (e.g. current tab) to show a notification
 export function desktopNotify(message: string, priority: number=0) {
-    browser.notifications.create({
+    browser.notifications.create({ // TODO ugh, this might not work when we use defensify from page context? i.e. sidebar?
         'type'    : "basic",
         'title'   : "promnesia",
         'message' : message,
@@ -121,7 +121,9 @@ async function showTabNotification(tabId: number | null, message: string, opts: 
             // ugh. might happen if the page is down..
         if (errmsg.includes('Missing host permission for the tab') ||
             // might happen on special pages?
-            errmsg.includes('Extension manifest must request permission to access this host')
+            errmsg.includes('Extension manifest must request permission to access this host') ||
+            // happens in chrome on http pages which are unreachable
+            errmsg.includes('is showing error page')
         ) {
             // in that case it doesn't have the context to show a popup.
             // could make it configurable??

@@ -22,6 +22,7 @@ from zoneinfo import ZoneInfo
 
 import platformdirs
 from more_itertools import intersperse
+from typing_extensions import deprecated
 
 from .cannon import canonify
 
@@ -343,8 +344,8 @@ class Source:
         self.args = args
         self.kwargs = kwargs
         self.extractor: Extractor = lambda: self.ff(*self.args, **self.kwargs)
-        if src is not None:
-            warnings.warn("'src' argument is deprecated, please use 'name' instead", DeprecationWarning)
+        if src != '':
+            warnings.warn("'src' argument is deprecated, use 'name' instead", DeprecationWarning)
         if name != '':
             self.name = name
         elif src != '':
@@ -362,8 +363,8 @@ class Source:
         return f'{getattr(self.ff, "__module__", None)}:{getattr(self.ff, "__name__", None)} {self.args} {self.kwargs}'
 
     @property
+    @deprecated("'src' property is deprecated, use 'name' instead")
     def src(self) -> str:
-        # TODO deprecated!
         return self.name
 
 
@@ -425,7 +426,7 @@ def default_cache_dir() -> Path:
 def _magic() -> Callable[[PathIsh], str | None]:
     logger = get_logger()
     try:
-        import magic  # type: ignore[import-not-found]
+        import magic  # type: ignore[import-not-found,unused-ignore]
     except Exception as e:
         logger.exception(e)
         defensive_msg: str | None = None
@@ -614,7 +615,8 @@ def measure(tag: str = '', *, logger: logging.Logger, unit: str = 'ms'):
     secs = after - before
     mult = {'s': 1, 'ms': 10**3, 'us': 10**6}[unit]
     xx = secs * mult
-    logger.debug(f'[{tag}]: {xx:.1f}{unit} elapsed')
+    if secs > 1:
+        logger.warning(f'[{tag}]: {xx:.1f}{unit} elapsed')
 
 
 def is_sqlite_db(x: Path) -> bool:

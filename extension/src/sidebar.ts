@@ -197,29 +197,25 @@ class Sidebar {
 
         const sidebar = doc.createElement('iframe')
         sidebar.style.display = 'none' // prevent flickering while iframe is being initialised
-        const isFirefox = window.navigator.userAgent.indexOf('Firefox') != -1
-        if (isFirefox) {
-            // under firefox, if src is set after appendChild, it ceases to be bfcache friendly for some reason
-            // i.e. sidebar doesn't persist back/fwd navigation
-            // however, it only reproduced under regular firefox -- doesn't matter under webdriver. odd
-            sidebar.src = ''
-            this.body.appendChild(sidebar)
-        } else {
-            // BUT: under chrome if src is set before appendChild, it just doesn't display anything?? ugh
-            this.body.appendChild(sidebar)
-            sidebar.src = ''
-        }
 
-        // TODO ugh it's a bit ridiculous that because of single iframe I have to propagate async everywhere..
+        // iframe will start loading after src is set
+        // however we need to add a load listener early, otherwise we might miss the event!
         const loadPromise = new Promise((resolve, /*reject*/) => {
-            // TODO not sure if there is anything to reject?..
-            // @ts-expect-error
-            sidebar.addEventListener('load', () => {resolve();}, {once: true});
-        });
-        // todo add timeout to make it a bit easier to debug?
-        await loadPromise;
+            // todo not sure if there is anything to reject?..
+            sidebar.addEventListener('load', resolve, {once: true})
+        })
 
-        this.setupFrame(sidebar);
+        // NOTE: under firefox, if src is set after appendChild, it ceases to be bfcache friendly for some reason
+        // i.e. sidebar doesn't persist back/fwd navigation
+        // however, it only reproduced under regular firefox -- doesn't matter under webdriver. odd
+        // Either way, seems like it's necessary to set src before appending in Chrome??
+        sidebar.src = ''
+        this.body.appendChild(sidebar)
+
+        // NOTE: seems like load is only triggered after we set src and append to document?
+        await loadPromise
+
+        this.setupFrame(sidebar)
 
         // TODO a bit nasty, but at the moment easiest way to solve it
         // apparently iframe is loading about:blank
@@ -576,7 +572,6 @@ async function* _bindSidebarData(response: Visits) {
         }
         const first = group[0];
         const last  = group[group.length - 1];
-        // eslint-disable-next-line no-unused-vars
         const [_fdates, ftimes] = visit_date_time(first)
         const [ldates, ltimes] = visit_date_time(last)
         const dates = ldates;
@@ -624,16 +619,17 @@ async function bindSidebarData(response: Visits) {
 
 
 // TODO ugh, it actually seems to erase all the class information :( is it due to message passing??
-// todo hmm this isn't used??
 function _requestVisits(): void {
-    browser.runtime.sendMessage({method: Methods.GET_SIDEBAR_VISITS})
-           .then((response: any) => {
-               if (response == null) {
-                   // todo why would it be?
-                   return
-               }
-               bindSidebarData(Visits.fromJObject(response))
-           })
+    // hmm, so right now we instead rely on webnavigation/updateState and BIND_SIDEBAR_VISITS
+    // don't quite remember why we're doing it this way? maybe reconsider in the future
+    // browser.runtime.sendMessage({method: Methods.GET_SIDEBAR_VISITS})
+    //        .then((response: any) => {
+    //            if (response == null) {
+    //                // todo why would it be?
+    //                return
+    //            }
+    //            bindSidebarData(Visits.fromJObject(response))
+    //        })
 }
 
 

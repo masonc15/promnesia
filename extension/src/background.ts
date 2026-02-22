@@ -3,7 +3,7 @@ import browser from "webextension-polyfill"
 import type {Action, BrowserAction, Menus, PageAction, Runtime, Tabs, WebNavigation} from "webextension-polyfill"
 
 import type {Url, SearchPageParams} from './common'
-import {Visit, Visits, Blacklisted, Methods, assert, uuid} from './common'
+import {Visit, Visits, Blacklisted, Methods, assert, sleep, uuid} from './common'
 import {executeScript} from './compat'
 import type {Options} from './options'
 import {Toggles, getOptions, setOption, THIS_BROWSER_TAG} from './options'
@@ -125,7 +125,8 @@ function getIconStyle(result: Result): IconStyle {
 }
 
 
-async function updateState(tab: TabUrl): Promise<void> {
+async function updateState(options: {tab: TabUrl, navigationError: boolean}): Promise<void> {
+    const tab = options.tab
     const {url: url, id: tabId} = tab
 
     if (ignored(url)) {
@@ -140,40 +141,43 @@ async function updateState(tab: TabUrl): Promise<void> {
     // also this really needs to happen once for a specific tab? otherwise gonna have callback crap (i.e. messages received multiple times)
 
     // todo only inject after blacklist check? just in case?
-    let proceed: boolean
-    try {
-        const target = {tabId: tabId}
-        await browser.scripting.insertCSS    ({target: target, files: ['sidebar-outer.css']})
-        await browser.scripting.insertCSS    ({target: target, files: ['sidebar.css'      ]})
-        await browser.scripting.insertCSS    ({target: target, css: opts.position_css      })
-        await executeScript                  ({target: target, files: ['sidebar.js']       })
-        proceed = true // successful code injection
-    } catch (error) {
-        const msg = (error as Error).message
-        if (msg == null) {
-            throw error
-        }
-        if (msg.includes('Missing host permission for the tab')) {
-            // this seems to happen if we started injecting the code, but URL changed during that
-            // e.g. if you click on links in quick succession or press backward/forward quickly (esp. with hotkeys)
-            // should be covered by test_sidebar_navigation
+    if (!options.navigationError) {
+        // if navigation error happend, we'd get "missing host permission" error anyway
+        let sidebar_injected: boolean
+        try {
+            const target = {tabId: tabId}
+            await browser.scripting.insertCSS    ({target: target, files: ['sidebar-outer.css']})
+            await browser.scripting.insertCSS    ({target: target, files: ['sidebar.css'      ]})
+            await browser.scripting.insertCSS    ({target: target, css: opts.position_css      })
+            await executeScript                  ({target: target, files: ['sidebar.js']       })
+            sidebar_injected = true
+        } catch (error) {
+            const msg = (error as Error).message
+            if (msg == null) {
+                throw error
+            }
+            if (msg.includes('Missing host permission for the tab')) {
+                // this seems to happen if we started injecting the code, but URL changed during that
+                // e.g. if you click on links in quick succession or press backward/forward quickly (esp. with hotkeys)
+                // should be covered by test_sidebar_navigation
 
-            // NOTE: actually a bit misleading -- on firefox we are always getting this when we don't have host permissions
-            // whereas in chrome we're getting
-            // "Cannot access contents of the page. Extension manifest must request permission to access the respective host"
-            proceed = false
-        } else {
-            throw error
+                // NOTE: actually a bit misleading -- on firefox we are always getting this when we don't have host permissions
+                // whereas in chrome we're getting
+                // "Cannot access contents of the page. Extension manifest must request permission to access the respective host"
+                sidebar_injected = false
+            } else {
+                throw error
+            }
         }
-    }
 
-    // NOTE: if the page is unreachable, we can't inject stuff in it
-    // not sure how to detect it? tab doesn't have any interesting attributes
-    // firefox sets tab.title to "Server Not Found"? (TODO also see isOk logic below)
-    // TODO not sure if worth mapping promnesia button to something else in this case
-    if (!proceed) {
-        console.debug('cancelling state update request for %o -- likely URL changed during processing', tab)
-        return
+        // NOTE: if the page is unreachable, we can't inject stuff in it
+        // not sure how to detect it? tab doesn't have any interesting attributes
+        // firefox sets tab.title to "Server Not Found"? (TODO also see isOk logic below)
+        // TODO not sure if worth mapping promnesia button to something else in this case
+        if (!sidebar_injected) {
+            console.debug('cancelling state update request for %o -- likely URL changed during processing', tab)
+            return
+        }
     }
 
     let visits: Result
@@ -183,7 +187,7 @@ async function updateState(tab: TabUrl): Promise<void> {
         visits = new Blacklisted(url, bl)
     } else {
         // ok to query
-        if (opts.mark_visited_always) {
+        if (opts.mark_visited_always && !options.navigationError) {
             setTimeout(() => doToggleMarkVisited(tabId, {show: true})) // run it in parallel
         }
         visits = await allsources.visits(url)
@@ -194,7 +198,7 @@ async function updateState(tab: TabUrl): Promise<void> {
 
     // TODO move to getIconStyle??
     if (visits instanceof Visits) {
-        title = `${title}\nCanonical: ${visits.normalised_url}`;
+        title = `${title}\nCanonical: ${visits.normalised_url}`
     }
 
     // ugh, many of these are not supported on android.. https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/API/pageAction
@@ -247,25 +251,12 @@ async function updateState(tab: TabUrl): Promise<void> {
         return
     }
 
-    if (opts.sidebar_always_show) {
-        // TODO maybe hide if there are no visits?
-        // let it sxecute asynchronously
-        setTimeout(() => toggleSidebarOnTab(tab))
-    }
-
     if (visits instanceof Error) {
         // meh. but I guess kinda does the trick
         visits = new Visits(url, url, [visits])
     }
     console.assert(visits instanceof Visits)
   
-    // right, we can't inject code into error pages (effectively, internal). For these, display popup instead of sidebar?
-    // TODO and show system wide notification instead of tab notification?
-    // https://stackoverflow.com/questions/32761782/can-a-chrome-extension-run-code-on-a-chrome-error-page-i-e-err-internet-disco
-    // https://stackoverflow.com/questions/37093152/unchecked-runtime-lasterror-while-running-tabs-executescript-cannot-access-cont
-    // a little hacky, but kinda works? in Firefox too apparently
-    const isOk = (await browser.tabs.get(tabId)).favIconUrl != 'chrome://global/skin/icons/warning.svg'
-
     // TODO maybe store last time we showed it so it's not that annoying... although I definitely need js popup notification.
     const locs = visits.self_contexts().map(l => l == null ? null : l.title)
     if (locs.length !== 0) {
@@ -275,11 +266,29 @@ async function updateState(tab: TabUrl): Promise<void> {
         }
     }
 
+    if (options.navigationError) {
+        // we can't do much else at this point, can't inject sidebar into error page
+        return
+    }
+
+    if (opts.sidebar_always_show) {
+        // TODO maybe hide if there are no visits?
+        // let it sxecute asynchronously
+        setTimeout(() => toggleSidebarOnTab(tab))
+    }
+
+    // right, we can't inject code into error pages (effectively, internal). For these, display popup instead of sidebar?
+    // TODO and show system wide notification instead of tab notification?
+    // https://stackoverflow.com/questions/32761782/can-a-chrome-extension-run-code-on-a-chrome-error-page-i-e-err-internet-disco
+    // https://stackoverflow.com/questions/37093152/unchecked-runtime-lasterror-while-running-tabs-executescript-cannot-access-cont
+    // a little hacky, but kinda works? in Firefox too apparently
+    const isOk = (await browser.tabs.get(tabId)).favIconUrl != 'chrome://global/skin/icons/warning.svg'
+
     if (isOk) {
         // TODO even compiling this takes 50ms if 10K visits??
         // faster means of communication are going to require
         // so perhaps instead, truncate and suggest to use 'search-like' interface
-        sendSidebarMessage(tabId, {
+        await sendSidebarMessage(tabId, {
             method: Methods.BIND_SIDEBAR_VISITS,
             data  : visits.toJObject(),
         })
@@ -288,10 +297,23 @@ async function updateState(tab: TabUrl): Promise<void> {
     }
 }
 
-
-function sendSidebarMessage(tabId: number, message: any) {
-    // ugh.. just so I don't shoot myself in the foot again with using runtime.sendMessage...
-    browser.tabs.sendMessage(tabId, message)
+async function sendSidebarMessage(tabId: number, message: any) {
+    /*
+    This needs to be somewhat defensive; otherwise if the page is still loading/sidebar receiver isn't injected yet, we're getting
+    "Error: Could not establish connection. Receiving end does not exist."
+    This is tested by test_click_before_page_loaded
+    */
+    let ex: Error | null = null
+    for (let i = 0; i < 100; i++) {  // wait for 100 attemps x 100 ms = 10 seconds total, kind of arbitrary
+        try {
+            await browser.tabs.sendMessage(tabId, message)
+            return
+        } catch (e: any) {
+            ex = e as Error
+        }                                                                                                                                                                                                                                                                           
+        await sleep(100)
+    }        
+    throw ex
 }
 
 
@@ -467,7 +489,7 @@ async function doToggleMarkVisited(tabId: number, {show}: {show: boolean | null}
 
 function isSpecialProtocol(url: string): boolean {
     // TODO eh, maybe makes more sense to only allow http[s]/ftp/file?
-    const pro = new URL(url).protocol;
+    const pro = new URL(url).protocol
     if ([
         'chrome:',
         'chrome-devtools:',
@@ -476,9 +498,9 @@ function isSpecialProtocol(url: string): boolean {
         'about:', // e.g. about:addons or about:devtool
         'data:', // start page under chrome webdriver
     ].includes(pro)) {
-        return true;
+        return true
     }
-    return false;
+    return false
 }
 
 function ignored(url: string | null): string | null {
@@ -514,16 +536,21 @@ function ignored(url: string | null): string | null {
 
   TODO: might be interesting to start loading things in "before" instead -- could update icon etc earlier?
  **/
-// TODO maybe best to add filter object so the callback doesn't fire at all
-browser.webNavigation.onCompleted.addListener(defensify(async (detail: WebNavigation.OnCompletedDetailsType) => {
-    const fid = detail.frameId
+
+type WebNavigationDetails = {
+    frameId: number
+    url: string
+    tabId: number
+    error?: string
+}
+
+async function handleWebNavigationEvent(detail: WebNavigationDetails) {
+    if (detail.frameId != 0) {
+        // we only want to trigger on the 'main' frame, not child iframes etc
+        return
+    }
+
     const url = detail.url
-    if (fid == null || url == null) {
-        return
-    }
-    if (fid != 0) {
-        return
-    }
 
     const ireason = ignored(url)
     if (ireason != null) {
@@ -532,10 +559,10 @@ browser.webNavigation.onCompleted.addListener(defensify(async (detail: WebNaviga
         return
     }
 
-    console.debug('webNavigation.onCompleted: %o %o', UUID, detail)
+    console.debug('webNavigation: %o %o', UUID, detail)
 
     try {
-        await updateState({url: url, id: detail.tabId})
+        await updateState({tab: {url: url, id: detail.tabId}, navigationError: 'error' in detail})
     } catch (error) {
         const message = (error as Error).message
         if (message == null) {
@@ -553,6 +580,17 @@ browser.webNavigation.onCompleted.addListener(defensify(async (detail: WebNaviga
         }
         throw error
     }
+}
+
+// note: this is tested by test_unreachable_page
+browser.webNavigation.onErrorOccurred.addListener(defensify(async (detail: WebNavigation.OnErrorOccurredDetailsType) => {
+    await handleWebNavigationEvent(detail)
+}, 'webNavigation.onErrorOccurred'))
+
+
+// TODO maybe best to add filter object so the callback doesn't fire at all
+browser.webNavigation.onCompleted.addListener(defensify(async (detail: WebNavigation.OnCompletedDetailsType) => {
+    await handleWebNavigationEvent(detail)
 }, 'webNavigation.onCompleted'))
 
 
@@ -581,7 +619,7 @@ type ShouldProcess = {
     tid: number,
 }
 
-// check if page needs handling and notify suer if/why it can't be processed
+// check if page needs handling and notify user if/why it can't be processed
 async function shouldProcessPage(tab: TabUrl | null): Promise<ShouldProcess | null> {
     if (tab == null) {
         await notifications.page_ignored(null, null, "Couldn't determine current tab: must be a special page (or a bug?)")
@@ -633,46 +671,53 @@ async function handleOpenSearch(p: SearchPageParams = {}) {
 }
 
 
-const onMessageCallback = async (msg: any) => { // TODO not sure if should defensify here?
-    const method = msg.method
-    if (method == Methods.GET_SIDEBAR_VISITS) {
-        // TODO not sure if it might do unnecessary notifications here?
-        const atab = await getActiveTab()
-        // not sure if can happen.. but just in case
-        const should = await shouldProcessPage(atab)
-        if (should) {
-            const {url: url} = should
-            const visits = await allsources.visits(url)
-            if (visits instanceof Visits) {
-                return visits.toJObject()
-            } else {
-                // hmm. generally shouldn't happen, since sidebar is not bound on blacklisted urls
-                // show notification in dev mode?
-                console.trace("Shouldn't have happened! %o", visits)
-            }
-        }
-        // TODO err. not sure what's happening here...
-        // if i'm using await in return type, it expects me to return visits instead of true/false??
-        // is it automatically detecting whether it's a promise or not??
-        // perhaps async automatically uncurries last argument?
-        // could be Firefox only?
-        // sendResponse(visits);
-        // return true; // this is important!! otherwise message will not be sent?
-    } else if (method == Methods.SEARCH_VISITS_AROUND) {
-        const utc_timestamp_s: number = msg.utc_timestamp_s
-        await handleOpenSearch({
+// NOTE: onMessageListener shouldn't be async (see https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/API/runtime/onMessage#addlistener_syntax)
+// "If you pass an async function to addListener(), the listener returns a Promise for every message it receives, preventing other listeners from responding"
+const onMessageCallback = (message: any): Promise<any> | void => { // TODO not sure if should defensify here?
+    const method = message.method
+    if (method === undefined) {
+        return // not for this callback
+    }
+    if        (method === Methods.SEARCH_VISITS_AROUND) {
+        const utc_timestamp_s: number = message.utc_timestamp_s
+        return handleOpenSearch({
             utc_timestamp_s: utc_timestamp_s.toString()
         })
-    } else if (method == Methods.OPTIONS_UPDATED) {
-        updateContextMenus(msg.options)
-    } else if (method == Methods.MARK_VISITED) {
-        await defensify(handleToggleMarkVisited, 'handleToggleMarkVisited')()
-    } else if (method == Methods.OPEN_SEARCH) {
-        await handleOpenSearch()
-    } else if (method == Methods.ZAPPER_EXCLUDELIST) {
-        await AddToMarkVisitedExcludelist.handleZapperResult(msg)
+    } else if (method === Methods.OPTIONS_UPDATED) {
+        return updateContextMenus(message.options)
+    } else if (method === Methods.MARK_VISITED) {
+        return defensify(handleToggleMarkVisited, 'handleToggleMarkVisited')()
+    } else if (method === Methods.OPEN_SEARCH) {
+        return handleOpenSearch()
+    } else if (method === Methods.ZAPPER_EXCLUDELIST) {
+        // NOTE: at the moment, caller doesn't await, but maybe it should?
+        return AddToMarkVisitedExcludelist.handleZapperResult(message)
     }
-    return false;
+}
+
+const onMessageCallbackSeleniumBridge = (message: any, sender: Runtime.MessageSender): Promise<any> | void => {
+    // see selenium_bridge.js
+    if        (message === 'selenium-bridge-_execute_action') {
+        handleToggleSidebar()
+    } else if (message === 'selenium-bridge-_execute_browser_action') {
+        handleToggleSidebar()
+    } else if (message === 'selenium-bridge-mark_visited') {
+        handleToggleMarkVisited()
+    } else if (message === 'selenium-bridge-search') {
+        handleOpenSearch()
+    } else if (message === 'selenium-bridge-get-state') {
+        // Reverse bridge: return extension state so it can be read via webdriver
+        return (async () => {
+            assert(sender.tab != null)
+            const tabId = sender.tab.id
+            const action = browser.action ? browser.action : browser.browserAction
+            const state = {
+                badge_text: await action.getBadgeText({tabId: tabId}),
+                title: await action.getTitle({tabId: tabId}),
+            }
+            return state
+        })()
+    }
 }
 
 
@@ -682,13 +727,12 @@ export async function toggleSidebarOnTab(tab: TabUrl) {
         return
     }
     const {tid: tid} = should
-    // TODO eh, if the user clicks the icon too fast, it might not have a receiver? is there a way to find out??
-    sendSidebarMessage(tid, {method: Methods.SIDEBAR_TOGGLE})
+    await sendSidebarMessage(tid, {method: Methods.SIDEBAR_TOGGLE})
 }
 
 export async function handleToggleSidebar() {
     const atab = await getActiveTab()
-    toggleSidebarOnTab(atab!)
+    await toggleSidebarOnTab(atab!)
 }
 
 /*
@@ -827,11 +871,12 @@ const AddToMarkVisitedExcludelist = {
                         }
                     }).filter(e => e != null)
                     links = Array.from(new Set(links)).sort() // make unique
+                    // TODO await on sendMessage? not sure if there is any point unless errors propagate better?
+                    // NOTE: I think this needs to be chrome.runtime because it's executed in the page context, and it doesn't have browser. in chrome yet
                     // @ts-expect-error
                     chrome.runtime.sendMessage({method: method_zapper_excludelist, data: links})
                 })
                 const cancel = (e: KeyboardEvent) => {
-                    // console.error("ESCAPE!!!, %o", e)
                     if (e.key == 'Escape') {
                         document.removeEventListener('mouseover', listener)
                         window.removeEventListener('keydown', cancel)
@@ -1042,7 +1087,7 @@ function initContextMenus(): void {
 }
 
 
-function updateContextMenus(opts: Options): void {
+async function updateContextMenus(opts: Options): Promise<void> {
     if (!hasContextMenus()) {
         return
     }
@@ -1060,6 +1105,7 @@ function initBackground(): void {
     // otherwise doesn't work well with background page suspension
 
     browser.runtime.onMessage.addListener(onMessageCallback)
+    browser.runtime.onMessage.addListener(onMessageCallbackSeleniumBridge)
 
     registerActions()
 
@@ -1076,23 +1122,6 @@ function initBackground(): void {
 
     initContextMenus()
 }
-
-
-browser.runtime.onMessage.addListener((info: any, _: Runtime.MessageSender) => {
-    // see selenium_bridge.js
-    if (info === 'selenium-bridge-_execute_action') {
-        handleToggleSidebar()
-    }
-    if (info === 'selenium-bridge-_execute_browser_action') {
-        handleToggleSidebar()
-    }
-    if (info === 'selenium-bridge-mark_visited') {
-        handleToggleMarkVisited()
-    }
-    if (info === 'selenium-bridge-search') {
-        handleOpenSearch()
-    }
-})
 
 initBackground()
 

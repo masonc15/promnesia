@@ -4,7 +4,9 @@ Promnesia-specific addon wrappers
 
 from __future__ import annotations
 
+import functools
 import json
+import time
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -12,7 +14,6 @@ from pathlib import Path
 from time import sleep
 
 import pytest
-from addon_helper import AddonHelper
 from selenium.common.exceptions import TimeoutException
 from selenium.webdriver import Remote as Driver
 from selenium.webdriver.common.action_chains import ActionChains
@@ -21,29 +22,25 @@ from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.remote.webelement import WebElement
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait as Wait
-from webdriver_utils import frame_context, is_visible, wait_for_alert
-
-from promnesia.logging import LazyLogger
-
-logger = LazyLogger('promnesia-tests', level='debug')
-
 
 from promnesia.common import measure as measure_orig
 
+from .addon_helper import AddonHelper
+from .common import logger
+from .webdriver_utils import frame_context, is_visible, passes_check_visibility, wait_for_alert
 
-@contextmanager
-def measure(*args, **kwargs):
-    kwargs['logger'] = logger
-    with measure_orig(*args, **kwargs) as m:
-        yield m
+# logger is a required arg there, so need to pass it..
+measure = functools.partial(measure_orig, logger=logger)  # type: ignore[arg-type]
 
 
-def get_addon_source(kind: str) -> Path:
+@pytest.fixture
+def addon_source(*, browser) -> Path:
     # TODO compile first?
-    addon_path = (Path(__file__).parent.parent / 'extension' / 'dist' / kind).absolute()
-    assert addon_path.exists()
-    assert (addon_path / 'manifest.json').exists()
-    return addon_path
+    # TODO not sure, maybe need kind here? e.g. mobile
+    res = (Path(__file__).parent.parent / 'extension' / 'dist' / browser.name).absolute()
+    assert res.exists(), res
+    assert (res / 'manifest.json').exists(), res
+    return res
 
 
 LOCALHOST = 'http://localhost'
@@ -72,7 +69,7 @@ class Sidebar:
     def ctx(self) -> Iterator[WebElement]:
         selector = (By.XPATH, '//iframe[contains(@id, "promnesia-frame")]')
         wait = 5  # if you want to decrease this, make sure test_sidebar_navigation isn't failing
-        frame_element = Wait(self.driver, timeout=wait).until(
+        promnesia_frame = Wait(self.driver, timeout=wait).until(
             EC.presence_of_element_located(selector),
         )
 
@@ -80,9 +77,7 @@ class Sidebar:
         # TODO uncomment it later when sidebar is injected gracefully...
         # assert len(frames) == 1, frames  # just in case
 
-        frame_id = frame_element.get_attribute('id')
-        with frame_context(self.driver, frame_id) as frame:
-            assert frame is not None
+        with frame_context(self.driver, frame=promnesia_frame) as frame:
             yield frame
 
     @property
@@ -97,22 +92,34 @@ class Sidebar:
     def visible(self) -> bool:
         loc = (By.ID, PROMNESIA_SIDEBAR_ID)
         with self.ctx():
+            # NOTE: we use presence here, because sidebar might be present (as in iframe), but not visible
             Wait(self.driver, timeout=5).until(EC.presence_of_element_located(loc))
             # NOTE: document in JS here is in the context of iframe
             return is_visible(self.driver, self.driver.find_element(*loc))
 
+    def wait_until_visible(self, *, timeout_s: float = 5) -> None:
+        # ugh... somewhat annoying, we need to 'share' timeout between the frame and sidebar...
+        # since to wait for sidebar we first need to enter the frame
+        start_time = time.monotonic()
+        promnesia_frame = Wait(self.driver, timeout=timeout_s).until(
+            EC.presence_of_element_located((By.XPATH, '//iframe[contains(@id, "promnesia-frame")]'))
+        )
+        elapsed = time.monotonic() - start_time
+
+        timeout_s -= elapsed  # seems like webdriver should handle fine even if it's negative
+
+        with frame_context(self.driver, frame=promnesia_frame):
+            Wait(self.driver, timeout=timeout_s).until(passes_check_visibility((By.ID, PROMNESIA_SIDEBAR_ID)))
+
     def open(self) -> None:
         assert not self.visible
         self.addon.activate()
-
-        with measure('Sidebar.open') as m:
-            while not self.visible:
-                assert m() <= 10, 'timeout'
-                sleep(0.001)
+        self.wait_until_visible(timeout_s=10)
 
     def close(self) -> None:
         assert self.visible
         self.addon.activate()
+        # TODO swith to something like ensure_not_visible with proper timeout?
         with measure('Sidebar.close') as m:
             while self.visible:
                 assert m() <= 10, 'timeout'
@@ -177,8 +184,7 @@ class OptionsPage:
             if selected != value:
                 cb.click()
 
-        # TODO log properly
-        print(f"Setting: port {port}, show_dots {show_dots}")
+        logger.debug(f"setting: {port=}, {show_dots=}")
 
         self.open()
 
@@ -245,7 +251,9 @@ class OptionsPage:
         # selenium.common.exceptions.ElementNotInteractableException: Message: Element <textarea> could not be scrolled into view
 
         def contents() -> str:
-            return self.helper.driver.execute_script('return arguments[0].cmView.view.state.doc.toString()', area)
+            return self.helper.driver.execute_script(
+                'return arguments[0].cmTile.view.viewState.state.doc.toString()', area
+            )
 
         # TODO FFS. these don't seem to work??
         # count = len(area.get_attribute('value'))
@@ -292,22 +300,6 @@ class Addon:
 
     @property
     def sidebar(self) -> Sidebar:
-        driver = self.helper.driver
-        if driver.name == 'chrome':
-            browser_version = tuple(map(int, driver.capabilities['browserVersion'].split('.')))
-            driver_version = tuple(
-                map(int, driver.capabilities['chrome']['chromedriverVersion'].split(' ')[0].split('.'))
-            )
-            last_working = (113, 0, 5623, 0)
-            if browser_version > last_working or driver_version > last_working:
-                # NOTE: feel free to comment this out if necessary, it's just to avoid hours of debugging
-                raise RuntimeError(
-                    f"""
-NOTE: you're using chrome {browser_version} with chromedriver {driver_version}.
-Some tests aren't working with recent Chrome versions (later than {last_working}) due to regressions in chromedriver.
-See https://bugs.chromium.org/p/chromedriver/issues/detail?id=4440
-"""
-                )
         return Sidebar(addon=self)
 
     def activate(self) -> None:
@@ -361,7 +353,6 @@ See https://bugs.chromium.org/p/chromedriver/issues/detail?id=4440
 
 
 @pytest.fixture
-def addon(driver: Driver) -> Addon:
-    addon_source = get_addon_source(kind=driver.name)
+def addon(*, driver: Driver, addon_source: Path) -> Addon:
     helper = AddonHelper(driver=driver, addon_source=addon_source)
     return Addon(helper=helper)
