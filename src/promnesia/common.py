@@ -94,6 +94,11 @@ def _warn_no_xdg_mime() -> None:
 
 @lru_cache(1)
 def _detect_mime_handler() -> str:
+    import sys
+    if sys.platform == 'darwin':
+        # xdg-mime doesn't exist on macOS; default to editor:// protocol
+        return 'editor://'
+
     def exists(what: str) -> bool:
         try:
             r = run(f'xdg-mime query default x-scheme-handler/{what}'.split(), stdout=PIPE, check=False)
